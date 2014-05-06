@@ -12,6 +12,7 @@ try:
 except:
     __version__ = 'unknown'
 
+from datetime import datetime
 import httplib
 import os.path
 import simplejson
@@ -43,7 +44,16 @@ class APIError(Exception):
 class InvalidAccessToken(APIError):
     pass
 
+
+class InternalServerError(APIError):
+    code = 15
+
+    def __init__(self, message):
+        self.message = message
+
+
 ERROR_MAP = {
+    15: InternalServerError,
     18: InvalidAccessToken,
 }
 
@@ -145,6 +155,7 @@ class Resource(object):
         response = conn.getresponse()
         # Let's coerce it to Python
         data = api.formats[format](response.read())
+        api.ratelimit = RateLimit.from_response(response)
 
         if response.status != 200:
             raise ERROR_MAP.get(data['code'], APIError)(data['code'], data['response'])
@@ -154,11 +165,32 @@ class Resource(object):
         return data['response']
 
 
+class RateLimit(object):
+
+    def __init__(self, limit=0, remaining=0, reset='now'):
+        if reset == 'now':
+            reset = datetime.utcnow()
+        else:
+            reset = datetime.fromtimestamp(float(reset))
+        self.limit = limit
+        self.remaining = remaining
+        self.reset = reset
+
+    @classmethod
+    def from_response(cls, response):
+        limit = response.getheader('X-Ratelimit-Limit')
+        limit = int(limit) if limit else 0
+        remaining = response.getheader('X-Ratelimit-Remaining')
+        remaining = int(remaining) if remaining else 0
+        reset = response.getheader('X-Ratelimit-Reset', 'now')
+        return cls(limit, remaining, reset)
+
+
 def format_json(json):
     try:
         result = simplejson.loads(json)
     except simplejson.JSONDecodeError:
-        raise APIError('Expected json, received: ', json)
+        raise InternalServerError('Expected json, received: ' % json)
     return result
 
 
@@ -174,6 +206,7 @@ class DisqusAPI(Resource):
             warnings.warn('You should pass ``public_key`` in addition to your secret key.')
         self.format = format
         self.version = version
+        self.ratelimit = RateLimit()
         super(DisqusAPI, self).__init__(self)
 
     def _request(self, **kwargs):
