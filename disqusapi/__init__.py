@@ -154,9 +154,17 @@ class Resource(object):
         return data['response']
 
 
+def format_json(json):
+    try:
+        result = simplejson.loads(json)
+    except simplejson.JSONDecodeError:
+        raise APIError('Expected json, received: ', json)
+    return result
+
+
 class DisqusAPI(Resource):
     formats = {
-        'json': lambda x: simplejson.loads(x),
+        'json': format_json,
     }
 
     def __init__(self, secret_key=None, public_key=None, format='json', version='3.0', **kwargs):
