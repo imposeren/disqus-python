@@ -12,11 +12,13 @@ try:
 except Exception:  # pragma: no cover
     __version__ = 'unknown'
 
-import re
-import zlib
+from datetime import datetime
+import httplib
 import os.path
-import warnings
+import re
 import socket
+import warnings
+import zlib
 
 try:
     import simplejson as json
@@ -68,7 +70,16 @@ class APIError(Exception):
 class InvalidAccessToken(APIError):
     pass
 
+
+class InternalServerError(APIError):
+    code = 15
+
+    def __init__(self, message):
+        self.message = message
+
+
 ERROR_MAP = {
+    15: InternalServerError,
     18: InvalidAccessToken,
 }
 
@@ -220,10 +231,32 @@ class Resource(object):
 
         if response.status != 200:
             raise ERROR_MAP.get(data['code'], APIError)(data['code'], data['response'])
+        api.ratelimit = RateLimit.from_response(response)
 
         if isinstance(data['response'], list):
             return Result(data['response'], data.get('cursor'))
         return data['response']
+
+
+class RateLimit(object):
+
+    def __init__(self, limit=0, remaining=0, reset='now'):
+        if reset == 'now':
+            reset = datetime.utcnow()
+        else:
+            reset = datetime.fromtimestamp(float(reset))
+        self.limit = limit
+        self.remaining = remaining
+        self.reset = reset
+
+    @classmethod
+    def from_response(cls, response):
+        limit = response.getheader('X-Ratelimit-Limit')
+        limit = int(limit) if limit else 0
+        remaining = response.getheader('X-Ratelimit-Remaining')
+        remaining = int(remaining) if remaining else 0
+        reset = response.getheader('X-Ratelimit-Reset', 'now')
+        return cls(limit, remaining, reset)
 
 
 class DisqusAPI(Resource):
@@ -242,6 +275,8 @@ class DisqusAPI(Resource):
         self.timeout = timeout or socket.getdefaulttimeout()
         self.interfaces = interfaces
         self.interfaces_by_method = build_interfaces_by_method(self.interfaces)
+        self.ratelimit = RateLimit()
+
         super(DisqusAPI, self).__init__(self)
 
     @property

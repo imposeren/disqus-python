@@ -1,3 +1,4 @@
+from datetime import datetime
 import mock
 import os
 import socket
@@ -61,17 +62,23 @@ def iter_results():
 
 
 class MockResponse(object):
-    def __init__(self, body, status=200):
+    def __init__(self, body, status=200, headers=None):
         self.body = body
         self.status = status
+        if headers is None:
+            headers = {}
+        self.headers = headers
 
     def read(self):
         return self.body
 
+    def getheader(self, key, default=None):
+        return self.headers.get(key, default)
 
 class DisqusAPITest(TestCase):
     API_SECRET = 'b' * 64
     API_PUBLIC = 'c' * 64
+
     HOST = os.environ.get('DISQUS_API_HOST', disqusapi.HOST)
 
     def setUp(self):
@@ -166,6 +173,28 @@ class DisqusAPITest(TestCase):
     def test_update_interface(self):
         api = disqusapi.DisqusAPI(self.API_SECRET, self.API_PUBLIC)
         api.update_interface(extra_interface)
+
+
+class RateLimitTest(TestCase):
+
+    def test_defaults(self):
+        rl = disqusapi.RateLimit()
+        assert rl.remaining == 0
+        assert rl.limit == 0
+        assert rl.reset <= datetime.utcnow()
+
+    def test_from_response(self):
+        timestamp = '1399359600'
+        resp = MockResponse('Hello World', headers={
+            'X-Ratelimit-Remaining': '123',
+            'X-Ratelimit-Limit': '1000',
+            'X-Ratelimit-Reset': timestamp,
+        })
+        rl = disqusapi.RateLimit.from_response(resp)
+        assert rl.remaining == 123
+        assert rl.limit == 1000
+        assert rl.reset == datetime.fromtimestamp(float(timestamp))
+
 
 if __name__ == '__main__':
     import unittest
